@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 TS = TypeVar("TS", bound="TextSplitter")
 """
-类型变量用于表示在代码中可以使用的未知类型或通用类型。
+类型变量用于表示在下面的代码中可以使用的未知类型或通用类型。
 bound参数表示 TS 应该是 TextSplitter 的子类。
 """
 
@@ -58,13 +58,38 @@ def _make_spacy_pipeline_for_splitting(pipeline: str) -> Any:  # avoid importing
 def _split_text_with_regex(
     text: str, separator: str, keep_separator: bool
 ) -> List[str]:
+    """
+    根据 separator 使用的正则表达式将字符串拆分为多个子 text 字符串，存在_splits中。
+    keep_separator参数确定分隔符是否应包含在生成的子字符串中。见下面的例子。
+
+    ({separator})是正则表达式，圆括号()是组，表示捕获文本。
+    separator = ","
+    text = "my life is the crown, and yours is politics."
+    _splits = re.split(f"({separator})", text) 
+    splits = re.split(separator, text)
+
+    有keep_separator：
+    _splits: ['my life is the crown', ',', ' and yours is politics.']
+    没有keep_separator：
+    splits:['my life is the crown', ' and yours is politics.']
+
+    如果没有separator，那么按照字母切分，变成['m', 'y', ' ', 'l', 'i', 'f', 'e',...]
+
+
+    
+    根据 separator 使用的正则表达式将字符串拆分为多个子 text 字符串，存在_splits中。
+    然后通过使用列表推导和切片的组合 _splits 相邻元素来创建新列表 splits。结果是包含分隔符的子字符串列表。
+    如果 _splits的长度为偶数，则_splits的最后一个元素添加到splits。
+    然后将第一个 _splits的元素添加到的splits 开头。
+
+    
+    """
     # Now that we have the separator, split the text
     if separator:
         if keep_separator:
             # The parentheses in the pattern keep the delimiters in the result.
-            _splits = re.split(f"({separator})", text)
-            splits = [_splits[i] + _splits[i + 1] for i in range(1, len(_splits), 2)]
-            if len(_splits) % 2 == 0:
+            _splits = re.split(f"({separator})", text)  # ({separator})是正则表达式，圆括号()是组，表示捕获文本。注意这里separator也会在结果的list中。
+            if len(_splits) % 2 != 0:  # 感觉这个if写的没啥用，可以去掉
                 splits += _splits[-1:]
             splits = [_splits[0]] + splits
         else:
@@ -91,7 +116,8 @@ class TextSplitter(BaseDocumentTransformer, ABC):
 
         Args:
             chunk_size: Maximum size of chunks to return  以4000个token为一个chunk进行切分
-            chunk_overlap: Overlap in characters between chunks chunk之间重叠的token数
+            chunk_overlap: Overlap in characters between chunks 下一个chunk包含上一个chunk的token数，主要为了增加页与页之间的上下文关联。
+            例如当 chunk_overlap=3 时，第一个chunk为 abcdefg，第二个为 efghijk，efg是重叠的。
             length_function: Function that measures the length of given chunks
             keep_separator: Whether to keep the separator in the chunks
             add_start_index: If `True`, includes chunk's start index in metadata
@@ -238,8 +264,17 @@ class TextSplitter(BaseDocumentTransformer, ABC):
         **kwargs: Any,
     ) -> TS:
         """Text splitter that uses tiktoken encoder to count length."""
+        """
+        tiktoken 是openai开源的tokenizer，主要实现了BPE算法。
+        对不同的模型，tiktoken有不同的编码方式：
+
+        对于模型gpt-4, gpt-3.5-turbo，采用cl100k_base编码。cl100k_base的词汇表数量大约为100k
+
+        对于模型text-davinci-002, text-davinci-003，采用p50k_base编码。
+        """
         try:
             import tiktoken
+       
         except ImportError:
             raise ImportError(
                 "Could not import tiktoken python package. "
@@ -484,6 +519,11 @@ def split_text_on_tokens(*, text: str, tokenizer: Tokenizer) -> List[str]:
     return splits
 
 
+"""
+一般模型都有token上限，按照character切分可能还是不知道token数是多少，按照token切分更加清楚。
+
+如果模型能够输入8000个token，那么在不超过token上限的情况下切成尽可能少的chunk，也就是chunk_size尽可能多，这样是更好的。
+"""
 class TokenTextSplitter(TextSplitter):
     """Implementation of splitting text that looks at tokens."""
 
@@ -624,6 +664,12 @@ class Language(str, Enum):
     HTML = "html"
     SOL = "sol"
 
+"""
+character textsplitter 按照句号问号划分，称为正则切分。正则切分之后，因为每块都很短，所以需要merge成更大的块送进模型。
+RecursiveCharacterTextSplitter
+
+它试着根据第一个字符来分割文本，如果某个文本块太大了，就会尝试用后面的字符来分割。默认情况下，它会尝试用 ["\n\n", "\n", " ", ""] 这四个字符来分割文本
+"""
 
 class RecursiveCharacterTextSplitter(TextSplitter):
     """Implementation of splitting text that looks at characters.
