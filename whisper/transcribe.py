@@ -147,6 +147,7 @@ def transcribe(
                     "Detecting language using up to the first 30 seconds. Use `--language` to specify the language"
                 )
             mel_segment = pad_or_trim(mel, N_FRAMES).to(model.device).to(dtype)
+            # 通过音频里面的特征，得到不同语言的prob，选择最大prob的那种语言
             _, probs = model.detect_language(mel_segment)
             decode_options["language"] = max(probs, key=probs.get)
             if verbose is not None:

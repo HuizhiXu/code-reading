@@ -166,16 +166,33 @@ class Inference:
 
 class PyTorchInference(Inference):
     def __init__(self, model: "Whisper", initial_token_length: int):
+        """
+        接受两个参数：model（类型为 "Whisper"）和 initial_token_length（初始标记长度）。
+        """
         self.model: "Whisper" = model
         self.initial_token_length = initial_token_length
         self.kv_cache = {}
         self.hooks = []
-
+        # key_modules存储了模型解码器中每个块的注意力机制的键（key）模块。
         key_modules = [block.attn.key for block in self.model.decoder.blocks]
+        # value_modules存储了模型解码器中每个块的注意力机制的值（value）模块
         value_modules = [block.attn.value for block in self.model.decoder.blocks]
+        # 是一个合并了 key_modules 和 value_modules 的列表
         self.kv_modules = key_modules + value_modules
 
     def logits(self, tokens: Tensor, audio_features: Tensor) -> Tensor:
+        """
+        这段代码的目的是在进行模型推理之前，检查是否存在键值缓存（kv_cache）。
+        如果缓存不存在，则通过调用模型的 install_kv_cache_hooks() 方法来安装键值缓存的钩子（hooks
+        接下来，如果输入的 tokens 张量的最后一个维度的大小大于初始标记长度，
+        则只需要使用最后一个标记，除了在首次前向传递时。
+        所以将 tokens 张量切片，只保留最后一个标记。
+
+        返回使用模型的解码器（decoder）进行推理的结果，其中传递了 tokens、audio_features 
+        和键值缓存（kv_cache）作为参数。
+        
+        
+        """
         if not self.kv_cache:
             self.kv_cache, self.hooks = self.model.install_kv_cache_hooks()
 
@@ -186,6 +203,9 @@ class PyTorchInference(Inference):
         return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
 
     def cleanup_caching(self):
+        """
+        清楚缓存，移除钩子
+        """
         for hook in self.hooks:
             hook.remove()
 
@@ -193,6 +213,9 @@ class PyTorchInference(Inference):
         self.hooks = []
 
     def rearrange_kv_cache(self, source_indices):
+        """
+        根据给定的源索引对键值缓存进行重新排列
+        """
         if source_indices != list(range(len(source_indices))):
             for module in self.kv_modules:
                 # update the key/value cache to contain the selected sequences
@@ -212,6 +235,7 @@ class SequenceRanker:
 
 class MaximumLikelihoodRanker(SequenceRanker):
     """
+    用于选择具有最高对数概率的样本，并使用简单的长度归一化或 Google NMT 论文中的长度惩罚进行惩罚。
     Select the sample with the highest log probabilities, penalized using either
     a simple length normalization or Google NMT paper's length penalty
     """
@@ -220,6 +244,23 @@ class MaximumLikelihoodRanker(SequenceRanker):
         self.length_penalty = length_penalty
 
     def rank(self, tokens: List[List[Tensor]], sum_logprobs: List[List[float]]):
+        """
+        它定义了一个名为 scores 的内部函数，用于计算每个样本的分数。
+        在 scores 函数中，根据是否指定了长度惩罚，计算每个样本的惩罚值，并将对数概率除以该惩罚值得
+        到最终的分数。然后，通过遍历 sum_logprobs 和 lengths，分别计算每个样本的长度，并调用 
+        scores 函数计算每个样本的分数。最后，返回具有最高分数的样本的索引。
+
+
+        问：长度惩罚是什么意思？
+        答：长度惩罚（length penalty）是指在序列生成任务中，为了平衡生成序列的长度和生成概率之间的关系，
+        对生成序列的得分进行调整或惩罚的方法。
+        在机器翻译和自然语言生成任务中，生成的序列长度通常对应着生成的文本的质量和流畅度。
+        较长的序列可能会包含更多的信息，但也可能导致生成结果过于冗长或不准确。为了避免这种情况，可以使用
+        长度惩罚来对生成的序列进行调整。
+        长度惩罚通常基于生成序列的长度进行计算，其中一种常见的方法是使用指数函数对长度进行惩罚。
+        例如，Google NMT 论文中提出的长度惩罚公式为 $((5 + \text{{length}}) / 6)^\text{{length_penalty}}$。
+        这个公式中，长度惩罚值根据序列的长度进行计算，然后与生成的对数概率相除，得到最终的分数。
+        """
         def scores(logprobs, lengths):
             result = []
             for logprob, length in zip(logprobs, lengths):
@@ -238,31 +279,23 @@ class MaximumLikelihoodRanker(SequenceRanker):
 
 class TokenDecoder:
     def reset(self):
+        """用于初始化解码新序列时的任何状态变量。"""
         """Initialize any stateful variables for decoding a new sequence"""
 
     def update(
         self, tokens: Tensor, logits: Tensor, sum_logprobs: Tensor
     ) -> Tuple[Tensor, bool]:
-        """Specify how to select the next token, based on the current trace and logits
+        """
+        根据当前的跟踪（trace）和逻辑回归（logits）来指定如何选择下一个标记（token）。
 
-        Parameters
-        ----------
-        tokens : Tensor, shape = (n_batch, current_sequence_length)
-            all tokens in the context so far, including the prefix and sot_sequence tokens
 
-        logits : Tensor, shape = (n_batch, vocab_size)
-            per-token logits of the probability distribution at the current step
-
-        sum_logprobs : Tensor, shape = (n_batch)
-            cumulative log probabilities for each sequence
-
-        Returns
-        -------
-        tokens : Tensor, shape = (n_batch, current_sequence_length + 1)
-            the tokens, appended with the selected next token
-
-        completed : bool
-            True if all sequences has reached the end of text
+        tokens 参数是一个张量, 形状为 (n_batch, current_sequence_length)，表示到目前为止上下
+        文中的所有标记（包括前缀和 sot_sequence 标记）。
+        logits 参数是一个张量,形状为 (n_batch, vocab_size)，表示当前步骤的每个标记的逻辑回归值。
+        sum_logprobs 参数是一个张量,形状为 (n_batch)，表示每个序列的累积对数概率。
+        方法返回一个元组,包含两个元素：
+        tokens 是一个张量,形状为 (n_batch, current_sequence_length + 1)，表示添加了选择的下一个标记后的标记序列。
+        completed 是一个布尔值,如果所有序列都到达文本的结尾,则为 True。
 
         """
         raise NotImplementedError
@@ -270,7 +303,7 @@ class TokenDecoder:
     def finalize(
         self, tokens: Tensor, sum_logprobs: Tensor
     ) -> Tuple[Sequence[Sequence[Tensor]], List[List[float]]]:
-        """Finalize search and return the final candidate sequences
+        """用于完成搜索并返回最终的候选序列
 
         Parameters
         ----------
@@ -300,6 +333,30 @@ class GreedyDecoder(TokenDecoder):
     def update(
         self, tokens: Tensor, logits: Tensor, sum_logprobs: Tensor
     ) -> Tuple[Tensor, bool]:
+        """
+        用于更新解码器的状态。根据给定的温度值，选择下一个token。
+        如果温度为0，则选择具有最高logits值的token；否则，根据logits / temperature的概率分布
+        采样下一个token。然后，计算log_softmax，并提取当前token的log概率。
+        接下来，根据当前token是否为eot，将log概率加权添加到sum_logprobs中。
+        然后，将当前token添加到tokens中。最后，检查是否所有序列都已经完成（即最后一个token为eot），
+        并返回更新后的tokens和完成状态。
+
+
+
+        在Categorical distribution中，每个可能的取值都与一个概率相关联，这些概率之和为1。
+        例如，假设我们有一个随机变量X，它可以取值为{A, B, C}，并且每个取值的概率分别
+        为{0.3, 0.4, 0.3}，那么这个随机变量X就服从Categorical distribution。
+
+
+        在文本分类和图像分类等任务中，Categorical distribution通常用于表示类别分布。
+        具体来说，可以使用一个向量来表示类别的概率分布，向量的长度等于类别的个数。
+        每个位置上的值表示对应类别的概率。
+
+        例如，在文本分类任务中，假设有3个类别：A、B和C。可以用一个长度为3的向量[0.3, 0.5, 0.2]
+        来表示这三个类别的概率分布。其中，第一个位置的值0.3表示类别A的概率为0.3，
+        第二个位置的值0.5表示类别B的概率为0.5，第三个位置的值0.2表示类别C的概率为0.2。
+        
+        """
         if self.temperature == 0:
             next_tokens = logits.argmax(dim=-1)
         else:
@@ -316,10 +373,31 @@ class GreedyDecoder(TokenDecoder):
         return tokens, completed
 
     def finalize(self, tokens: Tensor, sum_logprobs: Tensor):
+        """
+        接受两个参数tokens和sum_logprobs，并返回一个元组(Tensor, list)。
+        该方法用于最终处理解码结果。将每个序列的最后一个token设置为eot，并将结果返回。
+        """
         # make sure each sequence has at least one EOT token at the end
         tokens = F.pad(tokens, (0, 1), value=self.eot)
         return tokens, sum_logprobs.tolist()
+"""
+BeamSearchDecoder（束搜索解码器）和GreedyDecoder（贪婪解码器）的区别：
 
+
+BeamSearchDecoder（束搜索解码器）和GreedyDecoder（贪婪解码器）是在序列生成任务中常用的两种解码策略。
+它们的主要区别在于生成输出序列时的决策方式。
+
+**GreedyDecoder（贪婪解码器）**是一种基本的解码策略，它在每个时间步选择当前概率最高的单词作为输出。
+这意味着贪婪解码器只考虑每个时间步的局部最优解，并没有考虑整个序列的全局最优解。
+因此，贪婪解码器通常会导致生成的序列不够多样化，可能会出现重复或不合理的片段。
+
+**BeamSearchDecoder（束搜索解码器）**是一种更加复杂和计算密集的解码策略。
+它在每个时间步维护一个大小为beam_width的候选集合，通过计算每个候选序列的得分来选择最有可能的序列。
+BeamSearchDecoder会在每个时间步选择beam_width个候选序列，并在下一个时间步继续扩展这些序列，
+直到生成完整的输出序列。通过维护候选序列集合，并在每个时间步考虑多个可能的选择，
+束搜索解码器能够更好地探索搜索空间，从而更有可能找到全局最优解。
+
+"""
 
 class BeamSearchDecoder(TokenDecoder):
     def __init__(
@@ -328,7 +406,12 @@ class BeamSearchDecoder(TokenDecoder):
         eot: int,
         inference: Inference,
         patience: Optional[float] = None,
-    ):
+    ):  
+        """
+        ，beam_size表示Beam Search算法中保留的候选序列的数量，
+        eot表示序列的结束标志，inference表示推理模型，
+        patience表示控制Beam Search算法的搜索宽度。
+        """
         self.beam_size = beam_size
         self.eot = eot
         self.inference = inference
@@ -341,11 +424,22 @@ class BeamSearchDecoder(TokenDecoder):
         ), f"Invalid beam size ({beam_size}) or patience ({patience})"
 
     def reset(self):
+        """
+        用于重置解码器的状态，将已完成的序列设置为None。
+        """
         self.finished_sequences = None
 
     def update(
         self, tokens: Tensor, logits: Tensor, sum_logprobs: Tensor
     ) -> Tuple[Tensor, bool]:
+        """
+        该方法用于更新解码器的状态。首先，检查tokens的形状是否符合要求。
+        然后，根据beam_size将输入的tokens和logits进行处理，计算候选序列
+        的累积对数概率，并根据概率对候选序列进行排序，保留每个音频的top 
+        beam_size个序列。接下来，更新解码器的状态，包括记录已完成的序列和
+        重新排列推理模型的键值缓存。最后，检查是否所有音频都有足够数量的样
+        本，如果是，则标记为完成。
+        """
         if tokens.shape[0] % self.beam_size != 0:
             raise ValueError(f"{tokens.shape}[0] % {self.beam_size} != 0")
 
@@ -405,6 +499,10 @@ class BeamSearchDecoder(TokenDecoder):
         return tokens, completed
 
     def finalize(self, preceding_tokens: Tensor, sum_logprobs: Tensor):
+        """
+        将已完成的序列整理为tokens和sum_logprobs的列表，并根据patience补充未完成的序列。
+        """
+        
         # collect all finished sequences, including patience, and add unfinished ones if not enough
         sum_logprobs = sum_logprobs.cpu()
         for i, sequences in enumerate(self.finished_sequences):
