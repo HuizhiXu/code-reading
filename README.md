@@ -12,3 +12,5 @@
 | whisper  | tokenizer.py  | done  | 14.09.2023  | 100%  |
 | whisper  | audio.py  | done  | 14.09.2023  | 100%  |
 |  botorch | test_multi_objective.py  | done  |  27.02.2024 | 100%  |
+|  botorch | surrogate.py  | in progress  |  13.03.2024 | 50%  |
+|  botorch | utils.py  | in progress  |  13.03.2024 | 20%  |
