@@ -14,3 +14,5 @@
 |  botorch | test_multi_objective.py  | done  |  27.02.2024 | 100%  |
 |  botorch | surrogate.py  | in progress  |  13.03.2024 | 50%  |
 |  botorch | utils.py  | in progress  |  13.03.2024 | 20%  |
+|  ax | registry.py | done  |  14.03.2024 | 100%  |
+|  ax | botorch_moo.py | done  |  14.03.2024 | 50%  |
