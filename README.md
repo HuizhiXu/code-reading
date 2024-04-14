@@ -16,3 +16,6 @@
 |  botorch | utils.py  | in progress  |  13.03.2024 | 20%  |
 |  ax | registry.py | done  |  14.03.2024 | 100%  |
 |  ax | botorch_moo.py | done  |  14.03.2024 | 50%  |
+|  botorch | analytic.py | in progress  |  21.03.2024 | 50%  |
+|  ax | generation_strategy.py | in progress  |  21.03.2024 | 50%  |
+| genai | hw6_LLM_Values_Alignment.py | done  |  14.04.2024 | 100%  |
